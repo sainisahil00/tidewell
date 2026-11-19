@@ -63,15 +63,50 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Install packages & prepare server
+        run: |
+          ssh ubuntu@${{ secrets.EC2_HOST }} 'bash -s' <<'EOF'
+          set -e
+
+          # Install nginx + rsync
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx rsync
+
+          # Create web root owned by ubuntu
+          sudo mkdir -p /var/www/tidewell
+          sudo chown -R ubuntu:ubuntu /var/www/tidewell
+          sudo chmod -R 755 /var/www/tidewell
+
+          # Write nginx site config
+          sudo tee /etc/nginx/sites-available/tidewell > /dev/null <<'NGINX'
+          server {
+              listen 80 default_server;
+              server_name _;
+              root /var/www/tidewell;
+              index index.html;
+
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+          NGINX
+
+          sudo ln -sf /etc/nginx/sites-available/tidewell /etc/nginx/sites-enabled/tidewell
+          sudo rm -f /etc/nginx/sites-enabled/default
+
+          # Make sure nginx starts on boot
+          sudo systemctl enable nginx
+          EOF
+
       - name: Copy files to EC2
         run: |
           rsync -avz --delete dist/ \
             ubuntu@${{ secrets.EC2_HOST }}:/var/www/tidewell/
 
-      - name: Reload nginx
+      - name: Test config & restart nginx
         run: |
           ssh ubuntu@${{ secrets.EC2_HOST }} \
-            "sudo nginx -t && sudo systemctl reload nginx"
+            "sudo nginx -t && sudo systemctl restart nginx"
 
       - name: Smoke test
         run: |
